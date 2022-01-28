@@ -1,0 +1,137 @@
+GO				:= go
+PROTOC			:= protoc
+FIRST_GOPATH	:= $(firstword $(subst :, ,$(shell $(GO) env GOPATH)))
+PREFIX			?= $(shell pwd)
+
+
+INTERNAL_PROTO_FILES 	:= $(shell find internal -name *.proto)
+API_PROTO_FILES         := $(shell find api -name *.proto)
+
+SDKDIR      			:= $(FIRST_GOPATH)/src
+SWAGGERDIR  			:= $(PREFIX)/swagger
+
+GOLANGCI_LINT			?= $(FIRST_GOPATH)/bin/golangci-lint
+GOLANGCI_LINT_OPTS		?=
+GOCOV                   ?= $(FIRST_GOPATH)/bin/gocov
+GOCOV_HTML              ?= $(FIRST_GOPATH)/bin/gocov-html
+GOIMPORTS               ?= $(FIRST_GOPATH)/bin/goimports
+GOTESTSUM				?= $(FIRST_GOPATH)/bin/gotestsum
+GO_STRINGER             ?= $(FIRST_GOPATH)/bin/stringer
+
+
+
+pkgs := ./...
+test-pkgs = $(shell go list ./... | grep -v /vendor/)
+gofmt-files = $(shell go list -f '{{.Dir}}' ./... | grep -v /vendor/)
+
+GOTEST_DIR := test-results
+test-flags := -v
+ifeq ($(GOHOSTARCH),amd64)
+	ifeq ($(GOHOSTOS),$(filter $(GOHOSTOS),linux freebsd darwin windows))
+		# Only supported on amd64
+		test-flags := $(test-flags) -race
+	endif
+endif
+
+$(GOLANGCI_LINT): go.sum
+	@echo "> installing golangci-lint"
+	@$(GO) install "github.com/golangci/golangci-lint/cmd/golangci-lint"
+
+$(GOCOV): go.sum
+	@echo "> installing gocov"
+	@$(GO) install "github.com/axw/gocov/gocov"
+
+$(GOCOV_HTML): go.sum
+	@echo "> installing gocov-html"
+	@$(GO) install "github.com/matm/gocov-html"
+
+$(GOIMPORTS): go.sum
+	@echo "> installing goimports"
+	@$(GO) install "golang.org/x/tools/cmd/goimports"
+
+$(GOTESTSUM): go.sum
+	@echo "> installing gotestsum"
+	@$(GO) install "gotest.tools/gotestsum"
+
+$(GO_STRINGER): go.sum
+	@echo "> installing stringer"
+	@$(GO) install "golang.org/x/tools/cmd/stringer"
+
+
+# This rule is used to forward a target like "test" to "common-test".  This
+# allows a new "build" target to be defined in a Makefile which includes this
+# one and override "common-build" without override warnings.
+%: common-% ;
+
+.PHONY: common-all
+common-all: lint test
+
+
+.PHONY: common-setup
+common-setup:
+	@echo ">> Setup environments"
+	@$(GO) env -w GOPRIVATE=gitee.com
+	@$(GO) env -w GOPROXY=https://goproxy.cn,direct
+
+.PHONY: common-help
+common-help:
+	@echo ''
+	@echo 'Usage:'
+	@echo ' make [target]'
+	@echo ''
+	@echo 'Targets:'
+	@awk '/^[a-zA-Z\-\_0-9]+:/ { \
+	helpMessage = match(lastLine, /^# (.*)/); \
+		if (helpMessage) { \
+			helpCommand = substr($$1, 0, index($$1, ":")-1); \
+			helpMessage = substr(lastLine, RSTART + 2, RLENGTH); \
+			printf "\033[36m%-22s\033[0m %s\n", helpCommand,helpMessage; \
+		} \
+	} \
+	{ lastLine = $$0 }' $(MAKEFILE_LIST)
+
+.DEFAULT_GOAL := help
+
+
+.PHONY: common-test
+common-test:
+	@echo ">> running tests"
+	@$(GO) test $(test-flags) $(test-pkgs)
+
+
+$(GOTEST_DIR):
+	@mkdir -p $@
+
+
+coverprofile-txt = $(GOTEST_DIR)/coverage.txt
+coverprofile-json = $(GOTEST_DIR)/coverage.json
+coverreport-html = $(GOTEST_DIR)/coverage.html
+cover-flags = -coverprofile=$(coverprofile-txt) -covermode=atomic
+
+
+.PHONY: common-cover
+common-cover: $(GOTESTSUM) $(GOCOV) $(GOCOV_HTML) | $(GOTEST_DIR)
+	@echo ">> running test coverage"
+	@$(GOTESTSUM) --format testname --junitfile $(GOTEST_DIR)/unit-tests.xml -- \
+			$(test-flags) $(cover-flags) $(test-pkgs) && \
+		$(GOCOV) convert $(coverprofile-txt) >$(coverprofile-json) && \
+		$(GOCOV) report $(coverprofile-json) && \
+		$(GOCOV_HTML) $(GOTEST_DIR)/coverage.json >$(GOTEST_DIR)/coverage.html
+
+
+.PHONY: common-lint
+common-lint: $(GOLANGCI_LINT)
+	@echo ">> linting code"
+# 'go list' needs to be executed before staticcheck to prepopulate the modules cache.
+# Otherwise staticcheck might fail randomly for some reason not yet explained.
+	@$(GO) list -e -compiled -test=true -export=false -deps=true -find=false -tags= -- ./... > /dev/null
+	@$(GOLANGCI_LINT) run $(GOLANGCI_LINT_OPTS) $(pkgs)
+
+.PHONY: common-format
+common-format: $(GOIMPORTS)
+	@echo ">> formatting code"
+	@$(GOIMPORTS) -local "git.medlinker.com" -w $(gofmt-files)
+
+.PHONY: common-gen
+common-gen:
+

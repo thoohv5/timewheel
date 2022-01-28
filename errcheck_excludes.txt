@@ -1,0 +1,6 @@
+io.Copy(*bytes.Buffer)
+io.Copy(os.Stdout)
+
+// The next two are used in HTTP handlers, any error is handled by the server itself.
+io.WriteString
+(net/http.ResponseWriter).Write

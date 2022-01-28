@@ -1,0 +1,35 @@
+image: registry-vpc.cn-hangzhou.aliyuncs.com/medlinker/golang:1.13.1
+
+stages:
+  - test
+  - build
+  - deploy
+
+before_script:
+  # 配置私有仓库 credential
+  # https://docs.gitlab.com/ee/user/project/new_ci_build_permissions_model.html#dependent-repositories
+  - echo -e "machine git.medlinker.com\nlogin gitlab-ci-token\npassword ${CI_JOB_TOKEN}" > ~/.netrc
+  - make setup
+
+lint:
+  stage: test
+  script:
+    - make lint
+
+gocover:
+  services:
+    - registry-vpc.cn-hangzhou.aliyuncs.com/medlinker/mysql:5.7.25
+  variables:
+    # MySQL container
+    DATABASE_DSN: "root@tcp(localhost)/test"
+    MYSQL_DATABASE: "test"
+    MYSQL_ROOT_PASSWORD: ""
+    MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+    MYSQL_ROOT_HOST: "%"
+  stage: test
+  script:
+    - .ci/test.sh
+  coverage: /^Total\sCoverage:\s(\d+(?:\.\d+)?%)/
+  artifacts:
+    paths:
+      - test-results/coverage.html
